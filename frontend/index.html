@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>TG Mini App MVP</title>
+
+    <!-- Telegram Mini Apps SDK -->
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="card">
+      <h1>TG Mini App MVP</h1>
+
+      <section class="grid">
+        <div>
+          <div class="label">Статус</div>
+          <div id="status" class="value">Не инициализировано</div>
+        </div>
+
+        <div>
+          <div class="label">User</div>
+          <pre id="user" class="value pre">(пусто)</pre>
+        </div>
+
+        <div class="row">
+          <button id="btn-validate">Validate initData</button>
+          <button id="btn-expand">Expand</button>
+        </div>
+      </section>
+
+      <details>
+        <summary>Raw initData</summary>
+        <pre id="initdata" class="pre small"></pre>
+      </details>
+    </main>
+
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>
