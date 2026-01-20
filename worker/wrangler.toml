@@ -1,4 +1,5 @@
-name = "tg-miniapp-api"
+# worker/wrangler.toml
+name = 'changer-mvp'
 main = "src/index.js"
 compatibility_date = "2026-01-20"
 
