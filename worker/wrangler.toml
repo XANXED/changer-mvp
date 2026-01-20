@@ -1,0 +1,6 @@
+name = "tg-miniapp-api"
+main = "src/index.js"
+compatibility_date = "2026-01-20"
+
+# Можно оставить так для MVP
+# Для продакшена лучше сузить CORS
