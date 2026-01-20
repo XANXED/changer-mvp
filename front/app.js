@@ -5,7 +5,7 @@ const initDataEl = document.getElementById("initdata");
 const btnValidate = document.getElementById("btn-validate");
 const btnExpand = document.getElementById("btn-expand");
 
-const API_BASE = "https://changer-mvp.egorkachek01.workers.dev/";
+const API_BASE = "https://changer-mvp.egorkachek01.workers.dev";
 
 function setStatus(text) {
   statusEl.textContent = text;
