@@ -38,6 +38,7 @@ export default {
 /**
  * Основная логика валидации initData
  */
+/** 
 async function handleValidate(request, env) {
   // Проверка конфигурации сервера
   if (!env.BOT_TOKEN) {
@@ -101,6 +102,37 @@ async function handleValidate(request, env) {
       auth_date: authDate
     })
   );
+}
+  */
+
+async function handleValidate(request, env) {
+  if (!env.BOT_TOKEN) return cors(json({ error: "SERVER_CONFIG_ERROR" }, 500));
+
+  const { initData } = await request.json();
+  const params = new URLSearchParams(initData);
+  const hash = params.get("hash");
+
+  // ЛОГ ДЛЯ ОТЛАДКИ (появится в консоли wrangler tail)
+  console.log("--- DEBUG START ---");
+  console.log("Raw initData:", initData);
+  
+  const dataCheckString = buildDataCheckString(params);
+  console.log("Data Check String:", dataCheckString);
+
+  const secretKey = await telegramWebAppSecretKey(env.BOT_TOKEN);
+  const expectedHash = await hmacHex(secretKey, dataCheckString);
+  
+  console.log("Expected Hash:", expectedHash);
+  console.log("Received Hash:", hash);
+  console.log("--- DEBUG END ---");
+
+  if (!timingSafeEqual(hash, expectedHash)) {
+    return cors(json({ ok: false, error: "INVALID_SIGNATURE" }, 401));
+  }
+
+  // ... остальной код (парсинг пользователя и возврат ok: true)
+  const user = JSON.parse(params.get("user") || "{}");
+  return cors(json({ ok: true, user }));
 }
 
 // --- Вспомогательные функции (Utility) ---
