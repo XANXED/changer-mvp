@@ -3,76 +3,107 @@
  * Секрет хранится как Wrangler secret: BOT_TOKEN
  */
 
+const VALID_AUTH_WINDOW = 300; // Данные считаются валидными только в течение 5 минут (300 секунд)
+
 export default {
   async fetch(request, env) {
-    const url = new URL(request.url);
-
-    // CORS (MVP)
+    // 1. Обработка CORS (Preflight request)
     if (request.method === "OPTIONS") {
       return cors(new Response(null, { status: 204 }));
     }
 
-    if (url.pathname === "/api/health") {
-      return cors(json({ ok: true, ts: Date.now() }));
+    try {
+      const url = new URL(request.url);
+
+      // Простейший Healthcheck
+      if (url.pathname === "/api/health") {
+        return cors(json({ ok: true, ts: Date.now() }));
+      }
+
+      // Основной эндпоинт валидации
+      if (url.pathname === "/api/validate" && request.method === "POST") {
+        return await handleValidate(request, env);
+      }
+
+      return cors(json({ ok: false, error: "NOT_FOUND" }, 404));
+    } catch (err) {
+      // Внутреннее логирование для разработчика
+      console.error("Worker Error:", err);
+      // Пользователю отдаем только общий код ошибки без деталей реализации
+      return cors(json({ ok: false, error: "INTERNAL_SERVER_ERROR" }, 500));
     }
-
-    if (url.pathname === "/api/validate" && request.method === "POST") {
-      if (!env.BOT_TOKEN) {
-        return cors(json({ ok: false, error: "BOT_TOKEN secret is not set" }, 500));
-      }
-
-      let body;
-      try {
-        body = await request.json();
-      } catch {
-        return cors(json({ ok: false, error: "Invalid JSON" }, 400));
-      }
-
-      const initData = body?.initData;
-      if (!initData || typeof initData !== "string") {
-        return cors(json({ ok: false, error: "initData is required" }, 400));
-      }
-
-      const parsed = parseInitData(initData);
-      const hash = parsed.get("hash");
-      if (!hash) {
-        return cors(json({ ok: false, error: "hash missing in initData" }, 400));
-      }
-
-      // Собираем data_check_string
-      const dataCheckString = buildDataCheckString(parsed);
-
-      const secretKey = await telegramWebAppSecretKey(env.BOT_TOKEN);
-      const expectedHash = await hmacHex(secretKey, dataCheckString);
-
-      if (!timingSafeEqual(hash, expectedHash)) {
-        return cors(json({ ok: false, error: "initData signature invalid" }, 401));
-      }
-
-      // (Опционально) Проверка свежести auth_date
-      const authDate = Number(parsed.get("auth_date") || "0");
-      // Для MVP — не режем, просто возвращаем; в проде обычно делают TTL, например 1-5 минут.
-
-      let user = null;
-      try {
-        user = parsed.get("user") ? JSON.parse(parsed.get("user")) : null;
-      } catch {
-        user = null;
-      }
-
-      return cors(
-        json({
-          ok: true,
-          auth_date: authDate,
-          user,
-          raw: Object.fromEntries(parsed.entries())
-        })
-      );
-    }
-
-    return cors(json({ ok: false, error: "Not found" }, 404));
   },
 };
+
+/**
+ * Основная логика валидации initData
+ */
+async function handleValidate(request, env) {
+  // Проверка конфигурации сервера
+  if (!env.BOT_TOKEN) {
+    console.error("Критическая ошибка: BOT_TOKEN не установлен в секретах Cloudflare");
+    return cors(json({ ok: false, error: "SERVER_CONFIG_ERROR" }, 500));
+  }
+
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return cors(json({ ok: false, error: "INVALID_JSON" }, 400));
+  }
+
+  const initData = body?.initData;
+  if (!initData || typeof initData !== "string") {
+    return cors(json({ ok: false, error: "INIT_DATA_REQUIRED" }, 400));
+  }
+
+  const parsed = parseInitData(initData);
+  const hash = parsed.get("hash");
+  const authDate = Number(parsed.get("auth_date") || "0");
+
+  if (!hash) {
+    return cors(json({ ok: false, error: "HASH_MISSING" }, 400));
+  }
+
+  // --- НОВОВВЕДЕНИЕ: Защита от Replay-атак ---
+  const now = Math.floor(Date.now() / 1000);
+  if (now - authDate > VALID_AUTH_WINDOW) {
+    return cors(json({ ok: false, error: "DATA_EXPIRED" }, 401));
+  }
+
+  // --- Валидация подписи (HMAC-SHA256) ---
+  const dataCheckString = buildDataCheckString(parsed);
+  const secretKey = await telegramWebAppSecretKey(env.BOT_TOKEN);
+  const expectedHash = await hmacHex(secretKey, dataCheckString);
+
+  if (!timingSafeEqual(hash, expectedHash)) {
+    return cors(json({ ok: false, error: "INVALID_SIGNATURE" }, 401));
+  }
+
+  // Извлекаем данные пользователя
+  let user = null;
+  try {
+    user = parsed.get("user") ? JSON.parse(parsed.get("user")) : null;
+  } catch {
+    user = null;
+  }
+
+  return cors(
+    json({
+      ok: true,
+      user: user ? {
+        id: user.id,
+        first_name: user.first_name,
+        last_name: user.last_name,
+        username: user.username,
+        language_code: user.language_code
+      } : null,
+      auth_date: authDate
+    })
+  );
+}
+
+// --- Вспомогательные функции (Utility) ---
 
 function json(obj, status = 200) {
   return new Response(JSON.stringify(obj), {
@@ -83,28 +114,16 @@ function json(obj, status = 200) {
 
 function cors(resp) {
   const headers = new Headers(resp.headers);
-  headers.set("Access-Control-Allow-Origin", "*");
+  headers.set("Access-Control-Allow-Origin", "*"); // В проде лучше заменить на конкретный домен
   headers.set("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
   headers.set("Access-Control-Allow-Headers", "Content-Type");
   return new Response(resp.body, { status: resp.status, headers });
 }
 
-/**
- * initData — это querystring формата "a=1&b=2&...".
- * Значения urlencoded.
- */
 function parseInitData(initData) {
-  const params = new URLSearchParams(initData);
-  // Важно: URLSearchParams уже делает url-decode
-  return params;
+  return new URLSearchParams(initData);
 }
 
-/**
- * data_check_string:
- * - берём все пары key=value кроме hash
- * - сортируем по key лексикографически
- * - соединяем через "\n"
- */
 function buildDataCheckString(params) {
   const entries = [];
   for (const [k, v] of params.entries()) {
@@ -115,13 +134,16 @@ function buildDataCheckString(params) {
   return entries.map(([k, v]) => `${k}=${v}`).join("\n");
 }
 
-/**
- * secret_key = HMAC_SHA256("WebAppData", bot_token)
- */
 async function telegramWebAppSecretKey(botToken) {
-  const key = await importHmacKey(encodeUtf8(botToken));
+  const key = await crypto.subtle.importKey(
+    "raw",
+    encodeUtf8(botToken),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
   const sig = await crypto.subtle.sign("HMAC", key, encodeUtf8("WebAppData"));
-  return new Uint8Array(sig); // bytes
+  return new Uint8Array(sig);
 }
 
 async function hmacHex(keyBytes, data) {
@@ -136,31 +158,15 @@ async function hmacHex(keyBytes, data) {
   return toHex(new Uint8Array(sig));
 }
 
-async function importHmacKey(rawBytes) {
-  return crypto.subtle.importKey(
-    "raw",
-    rawBytes,
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"]
-  );
-}
-
 function encodeUtf8(s) {
   return new TextEncoder().encode(s);
 }
 
 function toHex(bytes) {
-  let out = "";
-  for (const b of bytes) out += b.toString(16).padStart(2, "0");
-  return out;
+  return Array.from(bytes).map(b => b.toString(16).padStart(2, "0")).join("");
 }
 
-/**
- * Минимальная timing-safe проверка (по длине и по всем символам)
- */
 function timingSafeEqual(a, b) {
-  if (typeof a !== "string" || typeof b !== "string") return false;
   if (a.length !== b.length) return false;
   let res = 0;
   for (let i = 0; i < a.length; i++) res |= a.charCodeAt(i) ^ b.charCodeAt(i);
